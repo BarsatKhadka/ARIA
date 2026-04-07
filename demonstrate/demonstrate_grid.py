@@ -3,7 +3,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import json
-from grid import Grid
+from core.grid import Grid
 
 data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
 

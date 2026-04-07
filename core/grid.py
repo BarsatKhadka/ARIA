@@ -25,8 +25,13 @@ class Grid:
     def get(self, row: int, col: int) -> int:
         return int(self.data[row, col])
 
-    def set(self, row: int, col: int, value: int):
-        self.data[row, col] = value
+    def update(self, row: int, col: int, value: int) -> "Grid":
+        """Return a NEW Grid with one cell changed. Original is unchanged."""
+        if not (0 <= value <= 9):
+            raise ValueError(f"ARC colors must be 0–9, got {value}.")
+        new_data = self.data.copy()
+        new_data[row, col] = value
+        return Grid(new_data.tolist())
 
     # ── Color queries ─────────────────────────────────────────────────────────
 
@@ -42,6 +47,14 @@ class Grid:
 
     def equals(self, other: "Grid") -> bool:
         return self.shape == other.shape and np.array_equal(self.data, other.data)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Grid):
+            return NotImplemented
+        return self.equals(other)
+
+    def __hash__(self) -> int:
+        return hash(self.data.tobytes())
 
     def diff_mask(self, other: "Grid") -> np.ndarray:
         """
