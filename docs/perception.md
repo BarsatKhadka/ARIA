@@ -11,6 +11,9 @@ The `perception/` package breaks a raw `Grid` into structured observations — o
 | `perception/objects.py` | Connected components → list of `Object` dataclasses |
 | `perception/colors.py` | Background detection, color histogram, color regions → `ColorAnalysis` |
 | `perception/symmetry.py` | Vertical, horizontal, 180°, 90° symmetry tests + scores → `SymmetryResult` |
+| `perception/patterns.py` | Tile periodicity detection — smallest repeating tile and period → `PeriodicityResult` |
+| `perception/topology.py` | Pairwise spatial relations — direction, distance, touching, enclosure → `ObjectRelation` |
+| `perception/lines.py` | Horizontal, vertical, diagonal run detection (3+ cells, same color) → `Line` |
 
 ---
 ---
@@ -676,3 +679,630 @@ Returns `SymmetryResult`.
 |---|---|---|
 | `analyze_grid_symmetry(grid, threshold)` | `SymmetryResult` | Grid-only entry point |
 | `analyze_object_symmetry(obj, threshold)` | `SymmetryResult` | Object-only entry point |
+
+---
+
+---
+
+# patterns.py
+
+**File:** `perception/patterns.py`
+
+Tests whether a `Grid` tiles with a repeating 2D pattern. Tries every tile size from 2×2 up to half the grid dimensions and returns the smallest tile whose repetition reconstructs the grid, along with a match score.
+
+---
+
+## Why patterns.py exists
+
+Some ARC tasks present a grid that is clearly a tiled repetition of a smaller motif — the task might ask you to extract that motif, count how many times it repeats, or identify where the tiling breaks. Before a solver can do any of that it needs to know: "is this grid periodic, and if so what is the tile?"
+
+---
+
+## The `PeriodicityResult` dataclass
+
+```python
+@dataclass(frozen=True)
+class PeriodicityResult:
+    found:        bool
+    tile:         Optional[Grid]
+    period_rows:  Optional[int]
+    period_cols:  Optional[int]
+    score:        float
+```
+
+### `found`
+
+`True` if a tile was found whose repetition achieves the required `threshold`. `False` otherwise.
+
+### `tile`
+
+The minimal repeating `Grid` tile — the top-left `period_rows × period_cols` subgrid of the input. `None` when `found` is `False`.
+
+```python
+pr.tile  # Grid object you can inspect, pass to other functions, or compare
+```
+
+### `period_rows` / `period_cols`
+
+The height and width of the tile. Together they define the repetition period in both dimensions.
+
+```python
+pr.period_rows  # 3  → pattern repeats every 3 rows
+pr.period_cols  # 2  → pattern repeats every 2 columns
+```
+
+### `score`
+
+Fraction of grid cells (0.0–1.0) that are consistent with the detected tiling. When `found` is `True` this equals (or exceeds) `threshold`. When `found` is `False` this is the **best score seen across all tested tile sizes** — useful for detecting near-periodic grids even when no tile reaches `threshold`.
+
+```python
+pr.score  # 0.94 → 94 % of cells match the best tile found
+```
+
+---
+
+## `detect_periodicity`
+
+```python
+def detect_periodicity(
+    grid: Grid,
+    threshold: float = 1.0,
+) -> PeriodicityResult:
+```
+
+The single entry point.
+
+### How it works
+
+For every tile height `th` from `2` to `rows // 2` and every tile width `tw` from `2` to `cols // 2`:
+
+1. Take the top-left `th × tw` subgrid as the candidate tile.
+2. Tile it to cover the full grid dimensions (cropping the last partial repetition).
+3. Count what fraction of cells match (`score`).
+4. If `score ≥ threshold`, record this tile as a candidate.
+
+After all sizes are tested, the candidate with the **smallest area** (`th × tw`) is returned. Ties in area are broken by smaller `th` then smaller `tw`.
+
+### Parameters
+
+**`grid`**
+
+The source grid to test.
+
+**`threshold`**
+
+Minimum match fraction to declare periodicity found. Default `1.0` (perfect tiling only).
+
+```python
+# Perfect tiling only (default)
+pr = detect_periodicity(grid)
+
+# Allow up to 10 % noise or corruption
+pr = detect_periodicity(grid, threshold=0.9)
+```
+
+### Return value
+
+`PeriodicityResult`.
+
+### Minimum grid size
+
+The grid must be at least `4 × 4` to have any candidate tile size (the minimum tile is 2×2 inside a 4×4 grid). Smaller grids immediately return `found=False, score=0.0`.
+
+---
+
+## Score when `found` is `False`
+
+When no tile reaches `threshold`, `score` still tells you something:
+
+```python
+pr = detect_periodicity(grid)
+if not pr.found and pr.score > 0.9:
+    # The grid is almost periodic — one or two cells deviate.
+    # Lower the threshold or look for the corrupted cell.
+    pr2 = detect_periodicity(grid, threshold=0.9)
+```
+
+---
+
+## Common patterns
+
+### Check if the grid is a tiled repetition
+
+```python
+pr = detect_periodicity(grid)
+if pr.found:
+    print(f"Tile: {pr.period_rows}×{pr.period_cols}")
+    print(pr.tile)
+```
+
+### Extract the tile for further analysis
+
+```python
+pr = detect_periodicity(grid)
+if pr.found:
+    objects_in_tile = extract_objects(pr.tile)
+    sym = analyze_symmetry(pr.tile)
+```
+
+### Count how many times the tile repeats
+
+```python
+pr = detect_periodicity(grid)
+if pr.found:
+    reps_r = grid.rows // pr.period_rows
+    reps_c = grid.cols // pr.period_cols
+    total  = reps_r * reps_c
+```
+
+### Detect near-periodic grids (noisy or broken tiling)
+
+```python
+pr = detect_periodicity(grid, threshold=0.0)  # score only, no threshold
+if pr.score > 0.85:
+    # Mostly periodic — likely a tiling task with deliberate anomalies
+    pass
+```
+
+---
+
+## Full API reference
+
+### `PeriodicityResult` fields
+
+| Field | Type | Description |
+|---|---|---|
+| `found` | `bool` | True if a repeating tile was found at or above `threshold` |
+| `tile` | `Optional[Grid]` | The minimal repeating tile; `None` if not found |
+| `period_rows` | `Optional[int]` | Tile height (vertical period); `None` if not found |
+| `period_cols` | `Optional[int]` | Tile width (horizontal period); `None` if not found |
+| `score` | `float` | Best match fraction seen; equals threshold when found, otherwise the closest miss |
+
+### `detect_periodicity` parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `grid` | `Grid` | required | Source grid to test |
+| `threshold` | `float` | `1.0` | Minimum cell-match fraction to declare periodicity found |
+
+Returns `PeriodicityResult`.
+
+---
+
+---
+
+# topology.py
+
+**File:** `perception/topology.py`
+
+Computes pairwise spatial relationships between objects. For every pair it answers four questions: where is one relative to the other, how far apart are they, do they touch, and does one enclose the other?
+
+---
+
+## Why topology.py exists
+
+Most ARC tasks are relational — "move the object that is above the red one", "find the enclosed object", "connect the two touching shapes". Raw object lists give no relational structure. `topology.py` builds that structure as a flat list of `ObjectRelation` records that a solver can filter, sort, or group without re-reading the grid.
+
+---
+
+## The `ObjectRelation` dataclass
+
+```python
+@dataclass(frozen=True)
+class ObjectRelation:
+    a:           Object
+    b:           Object
+    direction:   Direction
+    distance:    float
+    touches:     bool
+    a_encloses_b: bool
+    b_encloses_a: bool
+```
+
+`ObjectRelation` is frozen. Relations are ordered: `(a, b)` and `(b, a)` are separate records with mirrored directions.
+
+### `direction`
+
+Where `b` sits relative to `a`, based on the vector between centroids.
+
+```
+"above" | "below" | "left" | "right"
+"above-left" | "above-right" | "below-left" | "below-right"
+"same"
+```
+
+A direction is **cardinal** when the primary axis is at least 2× the secondary axis. Otherwise it is **diagonal**. `"same"` only when centroids are identical (e.g. overlapping objects).
+
+```python
+rel.direction  # "above-right"
+```
+
+### `distance`
+
+Euclidean distance between the two centroids, in grid cells.
+
+```python
+rel.distance  # 5.385
+```
+
+### `touches`
+
+`True` if any pixel of `a` is 4-adjacent (cardinal neighbor) to any pixel of `b`. Objects that share a diagonal corner do **not** touch.
+
+```python
+rel.touches  # True
+```
+
+### `a_encloses_b` / `b_encloses_a`
+
+`True` if one object forms a closed wall around the other.
+
+Enclosure requires **both**:
+1. The outer object's bounding box strictly contains the inner object's bounding box.
+2. A flood fill of background cells starting from outside the grid cannot reach any background cell inside the inner object's bounding box — meaning the outer object forms a sealed border with no gaps.
+
+```python
+rel.a_encloses_b  # True  → a is a frame/ring around b
+rel.b_encloses_a  # False
+```
+
+---
+
+## Direction in detail
+
+The 2:1 threshold prevents centroid noise from flipping a clearly-vertical pair into a diagonal.
+
+```
+b is at dr=+4, dc=+1 relative to a
+→ |dr| = 4 ≥ 2×|dc| = 2  → "below"  (not "below-right")
+
+b is at dr=+3, dc=+2 relative to a
+→ neither axis dominates  → "below-right"
+```
+
+---
+
+## Enclosure in detail
+
+A bounding-box containment check alone is not enough — a C-shaped object contains a bounding box but has a gap. The flood fill closes that gap:
+
+- Seed from any background cell on the grid border.
+- Flood through background cells (skipping outer-object pixels).
+- If the flood reaches a background cell inside the inner object's bounding box, the wall has a gap → **not enclosed**.
+- If the flood is completely blocked → truly enclosed.
+
+This correctly handles frames, rings, and L-shapes (L-shape has a gap → not enclosed).
+
+---
+
+## `relate`
+
+```python
+def relate(a: Object, b: Object, grid: Grid, background: int = 0) -> ObjectRelation:
+```
+
+Compute the relation for a single ordered pair. Use this when you already know the two objects you care about.
+
+```python
+rel = relate(obj_a, obj_b, grid)
+```
+
+---
+
+## `relate_all`
+
+```python
+def relate_all(
+    objects: List[Object],
+    grid: Grid,
+    background: int = 0,
+) -> List[ObjectRelation]:
+```
+
+Compute relations for every ordered pair. Returns `n × (n-1)` records for `n` objects. Both `(a, b)` and `(b, a)` are included, so filtering by `rel.a` gives all relations from a given object's point of view.
+
+```python
+relations = relate_all(objects, grid)
+```
+
+---
+
+## Common patterns
+
+### Find all objects directly above a given object
+
+```python
+relations = relate_all(objects, grid)
+above_target = [r.a for r in relations if r.b is target and r.direction == "above"]
+```
+
+### Find the closest object to a given object
+
+```python
+relations = relate_all(objects, grid)
+from_target = [r for r in relations if r.a is target]
+nearest = min(from_target, key=lambda r: r.distance)
+```
+
+### Find all touching pairs (undirected)
+
+```python
+relations = relate_all(objects, grid)
+# (a,b) and (b,a) both appear; keep one direction to avoid duplicates
+touching = [(r.a, r.b) for r in relations if r.touches and id(r.a) < id(r.b)]
+```
+
+### Find enclosed objects
+
+```python
+relations = relate_all(objects, grid)
+enclosed = [(r.a, r.b) for r in relations if r.a_encloses_b]
+# enclosed[i] = (frame_object, inner_object)
+```
+
+### Check if two specific objects touch
+
+```python
+rel = relate(obj_a, obj_b, grid)
+rel.touches  # True / False
+```
+
+### Sort objects by distance from a reference
+
+```python
+relations = relate_all(objects, grid)
+from_ref = sorted(
+    [r for r in relations if r.a is reference],
+    key=lambda r: r.distance
+)
+```
+
+---
+
+## Full API reference
+
+### `ObjectRelation` fields
+
+| Field | Type | Description |
+|---|---|---|
+| `a` | `Object` | Reference object |
+| `b` | `Object` | Comparison object |
+| `direction` | `Direction` | Position of `b` relative to `a` |
+| `distance` | `float` | Euclidean centroid-to-centroid distance |
+| `touches` | `bool` | True if any pixel of `a` is 4-adjacent to any pixel of `b` |
+| `a_encloses_b` | `bool` | True if `a` forms a sealed border around `b` |
+| `b_encloses_a` | `bool` | True if `b` forms a sealed border around `a` |
+
+### `Direction` values
+
+`"above"`, `"below"`, `"left"`, `"right"`, `"above-left"`, `"above-right"`, `"below-left"`, `"below-right"`, `"same"`
+
+### `relate` parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `a`, `b` | `Object` | required | The two objects to relate |
+| `grid` | `Grid` | required | Source grid (used for enclosure flood fill) |
+| `background` | `int` | `0` | Background color |
+
+Returns `ObjectRelation`.
+
+### `relate_all` parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `objects` | `List[Object]` | required | All objects to pair up |
+| `grid` | `Grid` | required | Source grid |
+| `background` | `int` | `0` | Background color |
+
+Returns `List[ObjectRelation]` with `n × (n-1)` entries.
+
+---
+
+---
+
+# lines.py
+
+**File:** `perception/lines.py`
+
+Detects horizontal, vertical, and diagonal runs of the same color in a `Grid`. Returns every maximal run of length ≥ `min_length` as a `Line` dataclass with start, end, direction, color, and the full ordered cell sequence.
+
+---
+
+## Why lines.py exists
+
+Many ARC tasks hinge on lines — a dividing bar between two regions, a row that acts as a separator, a diagonal streak that must be extended, a cross pattern. Object extraction won't reliably isolate these because a long row of cells can look like a thin rectangle rather than a line. `lines.py` scans all four directions explicitly and gives the solver clean `Line` objects it can reason about directly.
+
+---
+
+## The `Line` dataclass
+
+```python
+@dataclass(frozen=True)
+class Line:
+    start:     Tuple[int, int]
+    end:       Tuple[int, int]
+    direction: LineDirection
+    color:     int
+    length:    int
+    cells:     Tuple[Tuple[int, int], ...]
+```
+
+`Line` is frozen. `cells` is an ordered tuple from `start` to `end`, always in the scan direction.
+
+### `start` / `end`
+
+`(row, col)` of the first and last cell in the run.
+
+```python
+line.start  # (2, 0)
+line.end    # (2, 7)
+```
+
+### `direction`
+
+One of four values:
+
+| Value | Meaning | Step |
+|---|---|---|
+| `"horizontal"` | same row, cols increase | → |
+| `"vertical"` | same col, rows increase | ↓ |
+| `"diagonal-down"` | row and col both increase | ↘ |
+| `"diagonal-up"` | row decreases, col increases | ↗ |
+
+### `color`
+
+ARC color (0–9) of every cell in the run.
+
+### `length`
+
+Number of cells. Always ≥ `min_length`.
+
+### `cells`
+
+Ordered `Tuple` of `(row, col)` from `start` to `end`. Use this to iterate over the line's cells, convert to a set for membership tests, or pass to other perception functions.
+
+```python
+line.cells  # ((2,0), (2,1), (2,2), (2,3))
+cell_set = set(line.cells)
+```
+
+---
+
+## `find_lines`
+
+```python
+def find_lines(
+    grid: Grid,
+    min_length: int = 3,
+    background: int = 0,
+    include_background: bool = False,
+) -> List[Line]:
+```
+
+The single entry point. Scans all four directions and returns every qualifying run.
+
+### Parameters
+
+**`grid`**
+
+The source grid.
+
+**`min_length`**
+
+Minimum run length to report. Default `3`. Must be ≥ 2.
+
+**`background`**
+
+Color treated as background. Runs of this color are excluded unless `include_background` is `True`. Default `0`.
+
+**`include_background`**
+
+When `True`, background-colored runs are also returned. Useful when you need to reason about the shape of background regions.
+
+### Return order
+
+Horizontal lines (row 0 → last row), then vertical (col 0 → last col), then diagonal-down, then diagonal-up. Within each direction, lines appear in scan order.
+
+### Raises
+
+`ValueError` if `min_length < 2`.
+
+---
+
+## What counts as a line
+
+A line is a **maximal** same-color run in one direction. "Maximal" means it cannot be extended: the cell before `start` and the cell after `end` (if they exist) are a different color. Two adjacent cells of the same color in the same direction are always part of the same line, never separate lines.
+
+```
+Row: 0 0 3 3 3 3 0 0
+          ↑           ↑
+        start        end  → one Line(color=3, length=4)
+```
+
+---
+
+## Common patterns
+
+### Find all lines of a specific color
+
+```python
+lines = find_lines(grid)
+red_lines = [l for l in lines if l.color == 2]
+```
+
+### Find horizontal lines that span the full grid width
+
+```python
+lines = find_lines(grid)
+full_width = [l for l in lines if l.direction == "horizontal" and l.length == grid.cols]
+```
+
+### Find lines that pass through a specific cell
+
+```python
+target = (3, 5)
+lines = find_lines(grid)
+through = [l for l in lines if target in set(l.cells)]
+```
+
+### Check if two objects are separated by a line
+
+```python
+lines = find_lines(grid)
+separators = [l for l in lines if l.direction == "vertical" and l.length >= grid.rows]
+```
+
+### Find the longest line
+
+```python
+lines = find_lines(grid)
+longest = max(lines, key=lambda l: l.length)
+```
+
+### Group lines by direction
+
+```python
+from collections import defaultdict
+lines = find_lines(grid)
+by_dir = defaultdict(list)
+for l in lines:
+    by_dir[l.direction].append(l)
+```
+
+### Find lines that cross (share a cell)
+
+```python
+lines = find_lines(grid)
+cell_sets = [set(l.cells) for l in lines]
+for i, a in enumerate(lines):
+    for b in lines[i+1:]:
+        if set(a.cells) & set(b.cells):
+            print(f"{a.direction} and {b.direction} cross")
+```
+
+---
+
+## Full API reference
+
+### `Line` fields
+
+| Field | Type | Description |
+|---|---|---|
+| `start` | `Tuple[int, int]` | `(row, col)` of the first cell |
+| `end` | `Tuple[int, int]` | `(row, col)` of the last cell |
+| `direction` | `LineDirection` | `"horizontal"`, `"vertical"`, `"diagonal-down"`, or `"diagonal-up"` |
+| `color` | `int` | ARC color (0–9) of every cell in the run |
+| `length` | `int` | Number of cells in the run |
+| `cells` | `Tuple[Tuple[int,int], ...]` | Ordered cell sequence from `start` to `end` |
+
+### `find_lines` parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `grid` | `Grid` | required | Source grid to scan |
+| `min_length` | `int` | `3` | Minimum run length; must be ≥ 2 |
+| `background` | `int` | `0` | Color to exclude from results |
+| `include_background` | `bool` | `False` | When True, background-colored runs are included |
+
+Returns `List[Line]`.
