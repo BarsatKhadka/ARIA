@@ -1169,12 +1169,40 @@ cell_set = set(line.cells)
 
 ---
 
+## Adaptive minimum length
+
+A fixed threshold of 3 causes the detector to fire on nearly every ARC grid — three same-color pixels in a row appear constantly as incidental noise, not as structural lines. `find_lines` therefore computes the threshold adaptively based on grid size:
+
+```
+min_length = max(3, max(rows, cols) // 3)
+```
+
+| Grid size | Adaptive min_length |
+|---|---|
+| 5×5 | 3 |
+| 9×9 | 3 |
+| 12×12 | 4 |
+| 15×15 | 5 |
+| 20×20 | 6 |
+| 30×30 | 10 |
+
+The standalone helper `adaptive_min_length(grid)` returns this value without running the full scan.
+
+```python
+from perception.lines import adaptive_min_length
+threshold = adaptive_min_length(grid)  # e.g. 7 for a 20×30 grid
+```
+
+Pass an explicit integer to `min_length` to override the adaptive threshold when you need a specific value.
+
+---
+
 ## `find_lines`
 
 ```python
 def find_lines(
     grid: Grid,
-    min_length: int = 3,
+    min_length: Optional[int] = None,
     background: int = 0,
     include_background: bool = False,
 ) -> List[Line]:
@@ -1190,7 +1218,7 @@ The source grid.
 
 **`min_length`**
 
-Minimum run length to report. Default `3`. Must be ≥ 2.
+Minimum run length to report. When `None` (default), computed adaptively as `max(3, max(rows, cols) // 3)`. Pass an explicit integer to override.
 
 **`background`**
 
@@ -1206,7 +1234,7 @@ Horizontal lines (row 0 → last row), then vertical (col 0 → last col), then 
 
 ### Raises
 
-`ValueError` if `min_length < 2`.
+`ValueError` if the effective `min_length < 2`.
 
 ---
 
@@ -1301,8 +1329,14 @@ for i, a in enumerate(lines):
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `grid` | `Grid` | required | Source grid to scan |
-| `min_length` | `int` | `3` | Minimum run length; must be ≥ 2 |
+| `min_length` | `Optional[int]` | `None` | Minimum run length; `None` → adaptive `max(3, max(rows,cols)//3)` |
 | `background` | `int` | `0` | Color to exclude from results |
 | `include_background` | `bool` | `False` | When True, background-colored runs are included |
 
 Returns `List[Line]`.
+
+### Standalone helpers
+
+| Function | Returns | Description |
+|---|---|---|
+| `adaptive_min_length(grid)` | `int` | `max(3, max(rows,cols)//3)` — the threshold used when `min_length=None` |

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Literal, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from core.grid import Grid
 
@@ -143,9 +143,28 @@ def _diagonal_up_sequences(grid: Grid) -> List[List[Tuple[int, int]]]:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def adaptive_min_length(grid: Grid) -> int:
+    """
+    Compute the minimum line length appropriate for *grid*'s size.
+
+    Formula: ``max(3, max(rows, cols) // 3)``
+
+    This prevents short same-color runs from being reported as structural
+    lines in larger grids.  Examples:
+
+    * 5×5  → 3   (anything shorter is meaningless)
+    * 9×9  → 3
+    * 12×9 → 4
+    * 15×15 → 5
+    * 20×20 → 6
+    * 30×30 → 10
+    """
+    return max(3, max(grid.rows, grid.cols) // 3)
+
+
 def find_lines(
     grid: Grid,
-    min_length: int = 3,
+    min_length: Optional[int] = None,
     background: int = 0,
     include_background: bool = False,
 ) -> List[Line]:
@@ -160,7 +179,10 @@ def find_lines(
     grid:
         The source :class:`~core.grid.Grid`.
     min_length:
-        Minimum run length to report. Default ``3``.
+        Minimum run length to report.  When ``None`` (default), the threshold
+        is computed adaptively as ``max(3, max(rows, cols) // 3)`` so that
+        short noise runs in large grids are suppressed.  Pass an explicit
+        integer to override.
     background:
         Color treated as background. Background-colored runs are excluded
         unless *include_background* is ``True``.
@@ -172,8 +194,9 @@ def find_lines(
     List of :class:`Line`, ordered: horizontal first (top→bottom),
     then vertical (left→right), then diagonal-down, then diagonal-up.
     """
-    if min_length < 2:
-        raise ValueError(f"min_length must be ≥ 2, got {min_length}")
+    effective = adaptive_min_length(grid) if min_length is None else min_length
+    if effective < 2:
+        raise ValueError(f"min_length must be ≥ 2, got {effective}")
 
     lines: List[Line] = []
 
@@ -187,7 +210,7 @@ def find_lines(
     for direction, sequences in scanners:
         for seq in sequences:
             for start_idx, end_idx, color in _scan_runs(
-                grid, seq, min_length, background, include_background
+                grid, seq, effective, background, include_background
             ):
                 lines.append(_make_line(seq, start_idx, end_idx, color, direction))
 
