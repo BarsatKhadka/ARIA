@@ -1340,3 +1340,220 @@ Returns `List[Line]`.
 | Function | Returns | Description |
 |---|---|---|
 | `adaptive_min_length(grid)` | `int` | `max(3, max(rows,cols)//3)` — the threshold used when `min_length=None` |
+
+---
+
+---
+
+# report.py
+
+**File:** `perception/report.py`
+
+Aggregates all perception modules into a single structured report for a task. Produces a `PerceptionReport` by running every module (objects, colors, symmetry, patterns, lines, topology) on every training pair and collecting both per-grid observations and cross-pair summaries.
+
+---
+
+## Why report.py exists
+
+Individual perception modules each answer one question about one grid. Agents need a unified view across all training pairs — "do all inputs have the same background?", "does any input have enclosure?", "how many objects are in the input vs the output?". `report.py` runs everything once and packages the answers into frozen dataclasses ready to pass directly to an agent.
+
+---
+
+## Dataclasses
+
+### `GridPerception`
+
+All perception module outputs for a single grid.
+
+```python
+@dataclass(frozen=True)
+class GridPerception:
+    # Objects
+    objects:       Tuple[Object, ...]
+    n_objects:     int
+    background:    int
+
+    # Colors
+    colors:        ColorAnalysis
+    n_colors:      int
+
+    # Symmetry
+    symmetry:      SymmetryResult
+    has_symmetry:  bool           # True if any symmetry type holds
+
+    # Periodicity
+    periodicity:   PeriodicityResult
+    is_periodic:   bool
+
+    # Lines
+    lines:         Tuple[Line, ...]
+    n_lines:       int
+
+    # Topology
+    relations:     Tuple[ObjectRelation, ...]
+    has_enclosure: bool           # True if any object pair has an enclosure relation
+```
+
+### `PairPerception`
+
+Perception of one input/output training pair.
+
+```python
+@dataclass(frozen=True)
+class PairPerception:
+    pair_index: int
+    input:      GridPerception
+    output:     GridPerception
+```
+
+### `PerceptionReport`
+
+Full report for a task, aggregated across all training pairs.
+
+```python
+@dataclass(frozen=True)
+class PerceptionReport:
+    n_pairs:          int
+    pair_perceptions: Tuple[PairPerception, ...]
+
+    # Cross-pair summaries (training inputs only)
+    all_inputs_have_symmetry:  bool
+    any_input_has_symmetry:    bool
+    all_inputs_periodic:       bool
+    any_input_periodic:        bool
+    all_inputs_have_enclosure: bool
+    any_input_has_enclosure:   bool
+    consistent_background:     Optional[int]  # None if varies across pairs
+    consistent_n_objects:      Optional[int]  # None if varies across pairs
+```
+
+Cross-pair summaries are derived from **input grids only**. Output grids are available via `pair_perceptions[i].output` but are not summarised at the report level — the agent can inspect them directly per pair.
+
+---
+
+## `perceive`
+
+```python
+def perceive(task: Task) -> PerceptionReport:
+```
+
+The single entry point. Runs all six perception modules on every training pair and returns a `PerceptionReport`.
+
+```python
+from core.task import Task
+from perception.report import perceive
+
+tasks = Task.load_all("data/arc-agi_training_challenges.json",
+                      "data/arc-agi_training_solutions.json")
+report = perceive(tasks["00576224"])
+```
+
+---
+
+## Common patterns
+
+### Check cross-pair structure at a glance
+
+```python
+report = perceive(task)
+print(report.consistent_background)   # e.g. 0 (black) or None if it varies
+print(report.consistent_n_objects)    # e.g. 3 or None
+print(report.any_input_has_symmetry)  # True / False
+print(report.any_input_has_enclosure) # True / False
+```
+
+### Inspect per-pair input vs output object counts
+
+```python
+for pp in report.pair_perceptions:
+    print(f"pair {pp.pair_index}: "
+          f"input_objs={pp.input.n_objects}  "
+          f"output_objs={pp.output.n_objects}")
+```
+
+### Get all objects from the first training input
+
+```python
+pp = report.pair_perceptions[0]
+for obj in pp.input.objects:
+    print(obj.dominant_color, obj.size, obj.centroid)
+```
+
+### Check whether the output gains or loses objects
+
+```python
+deltas = [pp.output.n_objects - pp.input.n_objects
+          for pp in report.pair_perceptions]
+# deltas consistent → likely a count-change rule
+```
+
+### Feed report to an agent (summary dict)
+
+```python
+report = perceive(task)
+summary = {
+    "n_pairs":            report.n_pairs,
+    "background":         report.consistent_background,
+    "n_objects":          report.consistent_n_objects,
+    "any_symmetry":       report.any_input_has_symmetry,
+    "any_periodic":       report.any_input_periodic,
+    "any_enclosure":      report.any_input_has_enclosure,
+    "pair_object_deltas": [
+        pp.output.n_objects - pp.input.n_objects
+        for pp in report.pair_perceptions
+    ],
+}
+```
+
+---
+
+## Full API reference
+
+### `GridPerception` fields
+
+| Field | Type | Description |
+|---|---|---|
+| `objects` | `Tuple[Object, ...]` | Extracted objects (4-connectivity, non-background) |
+| `n_objects` | `int` | Number of objects |
+| `background` | `int` | Detected background color (frequency method) |
+| `colors` | `ColorAnalysis` | Full color analysis including histogram and regions |
+| `n_colors` | `int` | Number of distinct colors present |
+| `symmetry` | `SymmetryResult` | Full symmetry analysis |
+| `has_symmetry` | `bool` | True if any of the four symmetry types holds |
+| `periodicity` | `PeriodicityResult` | Full periodicity analysis |
+| `is_periodic` | `bool` | True if a repeating tile was found |
+| `lines` | `Tuple[Line, ...]` | All detected lines (adaptive min_length) |
+| `n_lines` | `int` | Number of lines |
+| `relations` | `Tuple[ObjectRelation, ...]` | All pairwise object relations; empty if fewer than 2 objects |
+| `has_enclosure` | `bool` | True if any `ObjectRelation` has `a_encloses_b` or `b_encloses_a` |
+
+### `PairPerception` fields
+
+| Field | Type | Description |
+|---|---|---|
+| `pair_index` | `int` | Zero-based training pair index |
+| `input` | `GridPerception` | Perception of the input grid |
+| `output` | `GridPerception` | Perception of the output grid |
+
+### `PerceptionReport` fields
+
+| Field | Type | Description |
+|---|---|---|
+| `n_pairs` | `int` | Number of training pairs |
+| `pair_perceptions` | `Tuple[PairPerception, ...]` | Per-pair observations |
+| `all_inputs_have_symmetry` | `bool` | Every input grid has at least one symmetry |
+| `any_input_has_symmetry` | `bool` | At least one input grid has symmetry |
+| `all_inputs_periodic` | `bool` | Every input grid is periodic |
+| `any_input_periodic` | `bool` | At least one input grid is periodic |
+| `all_inputs_have_enclosure` | `bool` | Every input grid has an enclosure relation |
+| `any_input_has_enclosure` | `bool` | At least one input grid has an enclosure relation |
+| `consistent_background` | `Optional[int]` | Background color if the same across all inputs; `None` if it varies |
+| `consistent_n_objects` | `Optional[int]` | Object count if the same across all inputs; `None` if it varies |
+
+### `perceive` parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `task` | `Task` | required | Task with at least one training pair |
+
+Returns `PerceptionReport`.
