@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(/Users/barsat/Documents/ARIA/venv/bin/pip freeze:*)",
+      "Bash(/Users/barsat/Documents/ARIA/venv/bin/python:*)"
     ]
   }
 }
